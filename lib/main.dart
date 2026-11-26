@@ -230,6 +230,7 @@ class SupabaseService {
     );
   }
 }
+
 class WholesaleProduct {
   final String id;
   String name;
@@ -2116,4 +2117,60 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
             title: Text('${o.id} • ${o.status}',
                 style: const TextStyle(fontWeight: FontWeight.bold)),
             subtitle: Text('العنوان: ${o.confirmedAddress}'),
-            trailing: Text(_format
+            trailing: Text(_formatDinar(o.totalAmount),
+                style: const TextStyle(
+                    fontWeight: FontWeight.bold, color: Color(0xFF15803D))),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _buildAccountView() {
+    return ListView(
+      padding: const EdgeInsets.all(16),
+      children: [
+        Container(
+          padding: const EdgeInsets.all(18),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(18),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(widget.userName,
+                  style: const TextStyle(
+                      fontSize: 19, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 6),
+              Text('النشاط: ${widget.shopOrMerchantName}'),
+              Text('نوع الحساب: ${widget.accountRole}'),
+              Text('الهاتف: ${widget.phoneNumber}'),
+              Text('العنوان المؤكد: $_confirmedAddress'),
+            ],
+          ),
+        ),
+        const SizedBox(height: 12),
+        SwitchListTile(
+          value: _isMerchantView,
+          activeColor: const Color(0xFF15803D),
+          title: const Text('تفعيل قسم التاجر (رفع منتجات وأقسام)'),
+          onChanged: (val) => setState(() => _isMerchantView = val),
+        ),
+        const SizedBox(height: 10),
+        OutlinedButton.icon(
+          onPressed: () {
+            Navigator.pushAndRemoveUntil(
+              context,
+              MaterialPageRoute(builder: (_) => const LuxuryLoginScreen()),
+              (route) => false,
+            );
+          },
+          icon: const Icon(Icons.logout_rounded, color: Colors.red),
+          label:
+              const Text('تسجيل الخروج', style: TextStyle(color: Colors.red)),
+        ),
+      ],
+    );
+  }
+}
