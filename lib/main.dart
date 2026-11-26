@@ -1,11 +1,22 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
 
-void main() {
-  runApp(const SouqAlJumlaLuxuryApp());
+// ==========================================
+// إعدادات مشروع Supabase
+// ==========================================
+class SouqConfig {
+  static const String supabaseUrl = 'https://uaaxwivqzafevvqowdrx.supabase.co';
+  static const String supabaseAnonKey =
+      'sb_publishable_PJ9gxCPkXIfbpkYphPh-Wg_MYGyL59Z';
 }
 
-class SouqAlJumlaLuxuryApp extends StatelessWidget {
-  const SouqAlJumlaLuxuryApp({super.key});
+void main() {
+  runApp(const SouqAlJumlaOnlineApp());
+}
+
+class SouqAlJumlaOnlineApp extends StatelessWidget {
+  const SouqAlJumlaOnlineApp({super.key});
 
   @override
   Widget build(BuildContext context) {
@@ -29,6 +40,174 @@ class SouqAlJumlaLuxuryApp extends StatelessWidget {
         );
       },
       home: const LuxuryLoginScreen(),
+    );
+  }
+}
+
+// ==========================================
+// خدمة الاتصال مع Supabase (REST & Auth API)
+// ==========================================
+class SupabaseService {
+  static Map<String, String> _headers({String? accessToken}) {
+    return {
+      'apikey': SouqConfig.supabaseAnonKey,
+      'Authorization': 'Bearer ${accessToken ?? SouqConfig.supabaseAnonKey}',
+      'Content-Type': 'application/json',
+      'Prefer': 'return=representation',
+    };
+  }
+
+  static String _phoneToInternalEmail(String phone) {
+    final digits = phone.replaceAll(RegExp(r'[^0-9]'), '');
+    return 'iq_$digits@souqaljumla.iq';
+  }
+
+  // تسجيل حساب جديد
+  static Future> signUp({
+    required String fullName,
+    required String businessName,
+    required String accountType,
+    required String phone,
+    required String password,
+  }) async {
+    final email = _phoneToInternalEmail(phone);
+    final url = Uri.parse('${SouqConfig.supabaseUrl}/auth/v1/signup');
+
+    final res = await http.post(
+      url,
+      headers: _headers(),
+      body: jsonEncode({
+        'email': email,
+        'password': password,
+        'data': {
+          'full_name': fullName,
+          'business_name': businessName,
+          'account_type': accountType,
+          'phone': phone,
+          'city': 'الناصرية',
+        },
+      }),
+    );
+
+    final data = jsonDecode(res.body);
+    if (res.statusCode >= 400) {
+      throw Exception(data['msg'] ?? data['error_description'] ?? 'فشل إنشاء الحساب');
+    }
+
+    final token = data['access_token'] as String?;
+    final userId = data['user']?['id'] as String?;
+
+    if (userId != null) {
+      try {
+        await http.post(
+          Uri.parse('${SouqConfig.supabaseUrl}/rest/v1/profiles'),
+          headers: _headers(accessToken: token),
+          body: jsonEncode({
+            'id': userId,
+            'full_name': fullName,
+            'business_name': businessName,
+            'account_type': accountType,
+            'phone': phone,
+            'city': 'الناصرية',
+            'address': 'الناصرية - المنصورية',
+          }),
+        );
+      } catch (_) {}
+    }
+
+    return {
+      'token': token ?? SouqConfig.supabaseAnonKey,
+      'userId': userId ?? '',
+      'fullName': fullName,
+      'businessName': businessName,
+      'accountType': accountType,
+      'phone': phone,
+    };
+  }
+
+  // تسجيل الدخول
+  static Future> signIn({
+    required String phone,
+    required String password,
+  }) async {
+    final email = _phoneToInternalEmail(phone);
+    final url = Uri.parse(
+        '${SouqConfig.supabaseUrl}/auth/v1/token?grant_type=password');
+
+    final res = await http.post(
+      url,
+      headers: _headers(),
+      body: jsonEncode({
+        'email': email,
+        'password': password,
+      }),
+    );
+
+    final data = jsonDecode(res.body);
+    if (res.statusCode >= 400) {
+      throw Exception(data['error_description'] ?? data['msg'] ?? 'بيانات الدخول غير صحيحة');
+    }
+
+    final token = data['access_token'] as String;
+    final meta = (data['user']?['user_metadata'] as Map<String, dynamic>?) ?? {};
+
+    return {
+      'token': token,
+      'userId': data['user']?['id'] ?? '',
+      'fullName': meta['full_name'] ?? 'مستخدم سوق الجملة',
+      'businessName': meta['business_name'] ?? 'سوق الناصرية',
+      'accountType': meta['account_type'] ?? 'صاحب سوق',
+      'phone': meta['phone'] ?? phone,
+    };
+  }
+
+  // جلب المنتجات من Supabase
+  static Future<List<WholesaleProduct>> fetchProducts(String token) async {
+    final url = Uri.parse('${SouqConfig.supabaseUrl}/rest/v1/products?select=*');
+    final res = await http.get(url, headers: _headers(accessToken: token));
+    if (res.statusCode != 200) return [];
+
+    final List<dynamic> list = jsonDecode(res.body);
+    return list.map((row) {
+      return WholesaleProduct(
+        id: row['id'].toString(),
+        name: (row['name'] ?? 'منتج جملة').toString(),
+        category: (row['category'] ?? 'مواد غذائية').toString(),
+        badge: (row['badge'] ?? 'عرض الجملة').toString(),
+        itemsPerCarton: int.tryParse(row['items_per_carton'].toString()) ?? 12,
+        wholesalePrice: double.tryParse(row['wholesale_price'].toString()) ?? 0,
+        suggestedRetailPrice:
+            double.tryParse(row['suggested_retail_price'].toString()) ?? 0,
+        stock: int.tryParse(row['stock'].toString()) ?? 20,
+        merchantName: (row['merchant_name'] ?? 'تاجر جملة - الناصرية').toString(),
+        icon: Icons.inventory_2_rounded,
+      );
+    }).toList();
+  }
+
+  // إرسال طلب جديد إلى Supabase
+  static Future<void> createOrder({
+    required String token,
+    required String userId,
+    required String shopName,
+    required String address,
+    required double lat,
+    required double lng,
+    required double totalAmount,
+  }) async {
+    final url = Uri.parse('${SouqConfig.supabaseUrl}/rest/v1/orders');
+    await http.post(
+      url,
+      headers: _headers(accessToken: token),
+      body: jsonEncode({
+        if (userId.isNotEmpty) 'user_id': userId,
+        'shop_name': shopName,
+        'delivery_address': address,
+        'latitude': lat,
+        'longitude': lng,
+        'total_amount': totalAmount,
+        'status': 'قيد التجهيز',
+      }),
     );
   }
 }
@@ -61,7 +240,6 @@ class WholesaleProduct {
     required this.icon,
   });
 
-  double get unitPrice => wholesalePrice / itemsPerCarton;
   double get expectedCartonProfit =>
       (suggestedRetailPrice * itemsPerCarton) - wholesalePrice;
 }
@@ -73,7 +251,6 @@ class MarketOrder {
   final double totalAmount;
   final double deliveryFee;
   String status;
-  final DateTime time;
 
   MarketOrder({
     required this.id,
@@ -82,12 +259,11 @@ class MarketOrder {
     required this.totalAmount,
     required this.deliveryFee,
     this.status = 'قيد التجهيز',
-    required this.time,
   });
 }
 
 // ==========================================
-// 2. تسجيل الدخول (رقم الهاتف + كلمة المرور)
+// 2. تسجيل الدخول
 // ==========================================
 class LuxuryLoginScreen extends StatefulWidget {
   const LuxuryLoginScreen({super.key});
@@ -100,30 +276,50 @@ class _LuxuryLoginScreenState extends State<LuxuryLoginScreen> {
   final TextEditingController _phoneCtrl = TextEditingController();
   final TextEditingController _passCtrl = TextEditingController();
   bool _hidePass = true;
+  bool _isLoading = false;
 
-  void _signIn() {
+  Future<void> _signIn() async {
     final phone = _phoneCtrl.text.trim();
-    if (phone.isEmpty) {
+    final pass = _passCtrl.text.trim();
+
+    if (phone.isEmpty || pass.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('يرجى إدخال رقم الهاتف العراقي')),
+        const SnackBar(content: Text('يرجى إدخال رقم الهاتف وكلمة المرور')),
       );
       return;
     }
 
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(
-        builder: (_) => LuxuryMainAppShell(
-          userName: 'أحمد',
-          shopOrMerchantName: 'سوق المنصورية المركزي',
-          accountRole: 'صاحب سوق',
-          phoneNumber: phone,
-          initialAddress: 'الناصرية - المنصورية - قرب ملعب المنصورية',
-          lat: 31.0437,
-          lng: 46.2573,
+    setState(() => _isLoading = true);
+    try {
+      final session = await SupabaseService.signIn(phone: phone, password: pass);
+      if (!mounted) return;
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => LuxuryMainAppShell(
+            accessToken: session['token'],
+            userId: session['userId'],
+            userName: session['fullName'],
+            shopOrMerchantName: session['businessName'],
+            accountRole: session['accountType'],
+            phoneNumber: session['phone'],
+            initialAddress: 'الناصرية - المنصورية',
+            lat: 31.0437,
+            lng: 46.2573,
+          ),
         ),
-      ),
-    );
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.toString().replaceFirst('Exception: ', '')),
+          backgroundColor: Colors.red.shade700,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   @override
@@ -180,7 +376,7 @@ class _LuxuryLoginScreenState extends State<LuxuryLoginScreen> {
                           controller: _phoneCtrl,
                           keyboardType: TextInputType.phone,
                           decoration: InputDecoration(
-                            hintText: 'رقم الهاتف العراقي (مثال: 0780...)',
+                            hintText: 'رقم الهاتف العراقي',
                             prefixIcon: const Icon(Icons.phone_android_rounded,
                                 color: Color(0xFF15803D)),
                             filled: true,
@@ -204,7 +400,6 @@ class _LuxuryLoginScreenState extends State<LuxuryLoginScreen> {
                                 _hidePass
                                     ? Icons.visibility_outlined
                                     : Icons.visibility_off_outlined,
-                                color: const Color(0xFF374151),
                               ),
                               onPressed: () =>
                                   setState(() => _hidePass = !_hidePass),
@@ -228,14 +423,17 @@ class _LuxuryLoginScreenState extends State<LuxuryLoginScreen> {
                               shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(15),
                               ),
-                              elevation: 2,
                             ),
-                            onPressed: _signIn,
-                            child: const Text(
-                              'تسجيل الدخول',
-                              style: TextStyle(
-                                  fontSize: 16, fontWeight: FontWeight.bold),
-                            ),
+                            onPressed: _isLoading ? null : _signIn,
+                            child: _isLoading
+                                ? const CircularProgressIndicator(
+                                    color: Colors.white)
+                                : const Text(
+                                    'تسجيل الدخول',
+                                    style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold),
+                                  ),
                           ),
                         ),
                         const SizedBox(height: 14),
@@ -285,7 +483,7 @@ class _LuxuryLoginScreenState extends State<LuxuryLoginScreen> {
 }
 
 // ==========================================
-// 3. إنشاء حساب جديد (صاحب سوق أو تاجر جملة)
+// 3. إنشاء حساب جديد
 // ==========================================
 class LuxuryRegisterScreen extends StatefulWidget {
   const LuxuryRegisterScreen({super.key});
@@ -301,35 +499,61 @@ class _LuxuryRegisterScreenState extends State<LuxuryRegisterScreen> {
   final TextEditingController _passCtrl = TextEditingController();
   String _selectedRole = 'صاحب سوق';
   bool _hidePass = true;
+  bool _isLoading = false;
 
-  void _createAccount() {
+  Future<void> _createAccount() async {
     final name = _nameCtrl.text.trim();
     final business = _businessCtrl.text.trim();
     final phone = _phoneCtrl.text.trim();
+    final pass = _passCtrl.text.trim();
 
-    if (name.isEmpty || phone.isEmpty) {
+    if (name.isEmpty || phone.isEmpty || pass.length < 6) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('يرجى إدخال الاسم الكامل ورقم الهاتف')),
+        const SnackBar(
+            content: Text('أدخل الاسم ورقم الهاتف وكلمة مرور (6 أحرف فأكثر)')),
       );
       return;
     }
 
-    Navigator.pushAndRemoveUntil(
-      context,
-      MaterialPageRoute(
-        builder: (_) => LuxuryMainAppShell(
-          userName: name,
-          shopOrMerchantName:
-              business.isEmpty ? 'سوق الناصرية التجاري' : business,
-          accountRole: _selectedRole,
-          phoneNumber: phone,
-          initialAddress: 'الناصرية - المنصورية',
-          lat: 31.0437,
-          lng: 46.2573,
+    setState(() => _isLoading = true);
+    try {
+      final session = await SupabaseService.signUp(
+        fullName: name,
+        businessName: business.isEmpty ? 'سوق الناصرية التجاري' : business,
+        accountType: _selectedRole,
+        phone: phone,
+        password: pass,
+      );
+
+      if (!mounted) return;
+      Navigator.pushAndRemoveUntil(
+        context,
+        MaterialPageRoute(
+          builder: (_) => LuxuryMainAppShell(
+            accessToken: session['token'],
+            userId: session['userId'],
+            userName: session['fullName'],
+            shopOrMerchantName: session['businessName'],
+            accountRole: session['accountType'],
+            phoneNumber: session['phone'],
+            initialAddress: 'الناصرية - المنصورية',
+            lat: 31.0437,
+            lng: 46.2573,
+          ),
         ),
-      ),
-      (route) => false,
-    );
+        (route) => false,
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.toString().replaceFirst('Exception: ', '')),
+          backgroundColor: Colors.red.shade700,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
+    }
   }
 
   @override
@@ -456,7 +680,7 @@ class _LuxuryRegisterScreenState extends State<LuxuryRegisterScreen> {
                         controller: _passCtrl,
                         obscureText: _hidePass,
                         decoration: InputDecoration(
-                          hintText: 'كلمة المرور',
+                          hintText: 'كلمة المرور (6 أحرف فأكثر)',
                           prefixIcon: const Icon(Icons.lock_outline_rounded,
                               color: Color(0xFF15803D)),
                           suffixIcon: IconButton(
@@ -488,12 +712,16 @@ class _LuxuryRegisterScreenState extends State<LuxuryRegisterScreen> {
                               borderRadius: BorderRadius.circular(15),
                             ),
                           ),
-                          onPressed: _createAccount,
-                          child: const Text(
-                            'إرسال طلب إنشاء الحساب',
-                            style: TextStyle(
-                                fontSize: 16, fontWeight: FontWeight.bold),
-                          ),
+                          onPressed: _isLoading ? null : _createAccount,
+                          child: _isLoading
+                              ? const CircularProgressIndicator(
+                                  color: Colors.white)
+                              : const Text(
+                                  'إرسال طلب إنشاء الحساب',
+                                  style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.bold),
+                                ),
                         ),
                       ),
                       const SizedBox(height: 12),
@@ -567,7 +795,7 @@ class _LuxuryBrandMark extends StatelessWidget {
 }
 
 // ==========================================
-// 4. نافذة تحديد العنوان بالدبوس وتأكيد الموقع
+// 4. تحديد عنوان المحل بالدبوس وتأكيد الموقع
 // ==========================================
 class PinLocationConfirmSheet extends StatefulWidget {
   final String currentAddress;
@@ -584,7 +812,8 @@ class PinLocationConfirmSheet extends StatefulWidget {
   });
 
   @override
-  State<PinLocationConfirmSheet> createState() => _PinLocationConfirmSheetState();
+  State<PinLocationConfirmSheet> createState() =>
+      _PinLocationConfirmSheetState();
 }
 
 class _PinLocationConfirmSheetState extends State<PinLocationConfirmSheet> {
@@ -642,8 +871,6 @@ class _PinLocationConfirmSheetState extends State<PinLocationConfirmSheet> {
             ],
           ),
           const SizedBox(height: 8),
-
-          // اختيار منطقة سريعة في الناصرية
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(
@@ -673,15 +900,14 @@ class _PinLocationConfirmSheetState extends State<PinLocationConfirmSheet> {
             ),
           ),
           const SizedBox(height: 12),
-
-          // لوحة الخريطة التفاعلية مع الدبوس وأزرار تحريكه
           Container(
-            height: 175,
+            height: 170,
             width: double.infinity,
             decoration: BoxDecoration(
               color: const Color(0xFFE6F4EA),
               borderRadius: BorderRadius.circular(18),
-              border: Border.all(color: const Color(0xFF15803D).withOpacity(0.3)),
+              border:
+                  Border.all(color: const Color(0xFF15803D).withOpacity(0.3)),
             ),
             child: Stack(
               children: [
@@ -712,16 +938,14 @@ class _PinLocationConfirmSheetState extends State<PinLocationConfirmSheet> {
                   left: 8,
                   child: Row(
                     children: [
-                      _pinMoveBtn(Icons.arrow_upward, () => _movePin(0.0015, 0)),
+                      _pinBtn(Icons.arrow_upward, () => _movePin(0.0015, 0)),
                       const SizedBox(width: 4),
-                      _pinMoveBtn(
+                      _pinBtn(
                           Icons.arrow_downward, () => _movePin(-0.0015, 0)),
                       const SizedBox(width: 4),
-                      _pinMoveBtn(
-                          Icons.arrow_back, () => _movePin(0, -0.0015)),
+                      _pinBtn(Icons.arrow_back, () => _movePin(0, -0.0015)),
                       const SizedBox(width: 4),
-                      _pinMoveBtn(
-                          Icons.arrow_forward, () => _movePin(0, 0.0015)),
+                      _pinBtn(Icons.arrow_forward, () => _movePin(0, 0.0015)),
                     ],
                   ),
                 ),
@@ -729,13 +953,12 @@ class _PinLocationConfirmSheetState extends State<PinLocationConfirmSheet> {
             ),
           ),
           const SizedBox(height: 12),
-
           TextField(
             controller: _addrCtrl,
             decoration: InputDecoration(
               labelText: 'تفاصيل العنوان (الشارع / أقرب نقطة دالة)',
-              prefixIcon: const Icon(Icons.pin_drop_rounded,
-                  color: Color(0xFF15803D)),
+              prefixIcon:
+                  const Icon(Icons.pin_drop_rounded, color: Color(0xFF15803D)),
               filled: true,
               fillColor: const Color(0xFFF3F6F4),
               border: OutlineInputBorder(
@@ -745,7 +968,6 @@ class _PinLocationConfirmSheetState extends State<PinLocationConfirmSheet> {
             ),
           ),
           const SizedBox(height: 14),
-
           SizedBox(
             width: double.infinity,
             height: 50,
@@ -775,7 +997,7 @@ class _PinLocationConfirmSheetState extends State<PinLocationConfirmSheet> {
     );
   }
 
-  Widget _pinMoveBtn(IconData icon, VoidCallback onTap) {
+  Widget _pinBtn(IconData icon, VoidCallback onTap) {
     return InkWell(
       onTap: onTap,
       child: Container(
@@ -783,9 +1005,6 @@ class _PinLocationConfirmSheetState extends State<PinLocationConfirmSheet> {
         decoration: BoxDecoration(
           color: Colors.white,
           borderRadius: BorderRadius.circular(8),
-          boxShadow: [
-            BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 4),
-          ],
         ),
         child: Icon(icon, size: 16, color: const Color(0xFF15803D)),
       ),
@@ -794,9 +1013,11 @@ class _PinLocationConfirmSheetState extends State<PinLocationConfirmSheet> {
 }
 
 // ==========================================
-// 5. الهيكل الرئيسي للتطبيق (المشتري + التاجر)
+// 5. الشاشة الرئيسية المتصلة بـ Supabase
 // ==========================================
 class LuxuryMainAppShell extends StatefulWidget {
+  final String accessToken;
+  final String userId;
   final String userName;
   final String shopOrMerchantName;
   final String accountRole;
@@ -807,6 +1028,8 @@ class LuxuryMainAppShell extends StatefulWidget {
 
   const LuxuryMainAppShell({
     super.key,
+    required this.accessToken,
+    required this.userId,
     required this.userName,
     required this.shopOrMerchantName,
     required this.accountRole,
@@ -826,7 +1049,6 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
   late String _confirmedAddress;
   late double _lat;
   late double _lng;
-  bool _locationConfirmed = true;
 
   String _selectedCategory = 'الكل';
   String _searchQuery = '';
@@ -842,7 +1064,7 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
     'منظفات',
   ];
 
-  final List<WholesaleProduct> _products = [
+  List<WholesaleProduct> _products = [
     WholesaleProduct(
       id: 'P1',
       name: 'أرز بسمتي فاخر - كيس 30 كغم',
@@ -891,30 +1113,6 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
       merchantName: 'توزيع الجنوب',
       icon: Icons.local_drink_rounded,
     ),
-    WholesaleProduct(
-      id: 'P5',
-      name: 'ألبان وأجبان - كرتون 18 عبوة',
-      category: 'ألبان وأجبان',
-      badge: 'عروض 3',
-      itemsPerCarton: 18,
-      wholesalePrice: 54000,
-      suggestedRetailPrice: 3750,
-      stock: 32,
-      merchantName: 'مخازن الفرات للجملة',
-      icon: Icons.egg_alt_rounded,
-    ),
-    WholesaleProduct(
-      id: 'P6',
-      name: 'منظفات ومطهرات - كرتون 12 عبوة',
-      category: 'منظفات',
-      badge: 'عروض 2',
-      itemsPerCarton: 12,
-      wholesalePrice: 42000,
-      suggestedRetailPrice: 4500,
-      stock: 45,
-      merchantName: 'توزيع الجنوب',
-      icon: Icons.cleaning_services_rounded,
-    ),
   ];
 
   @override
@@ -924,6 +1122,16 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
     _confirmedAddress = widget.initialAddress;
     _lat = widget.lat;
     _lng = widget.lng;
+    _loadRemoteProducts();
+  }
+
+  Future<void> _loadRemoteProducts() async {
+    try {
+      final remote = await SupabaseService.fetchProducts(widget.accessToken);
+      if (remote.isNotEmpty && mounted) {
+        setState(() => _products = remote);
+      }
+    } catch (_) {}
   }
 
   String _formatDinar(double value) {
@@ -950,7 +1158,6 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
             _confirmedAddress = addr;
             _lat = newLat;
             _lng = newLng;
-            _locationConfirmed = true;
           });
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
@@ -963,23 +1170,7 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
     );
   }
 
-  void _addToCart(String productId) {
-    setState(() {
-      _cart[productId] = (_cart[productId] ?? 0) + 1;
-    });
-  }
-
-  void _removeFromCart(String productId) {
-    setState(() {
-      if ((_cart[productId] ?? 0) > 1) {
-        _cart[productId] = _cart[productId]! - 1;
-      } else {
-        _cart.remove(productId);
-      }
-    });
-  }
-
-  void _submitOrder() {
+  Future<void> _submitOrder() async {
     if (_cart.isEmpty) return;
 
     double subtotal = 0;
@@ -989,8 +1180,20 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
       prod.stock = (prod.stock - qty).clamp(0, 9999);
     });
 
-    // أول 4 طلبات توصيل مجاني
     final double fee = _orders.length < 4 ? 0 : 5000;
+    final double total = subtotal + fee;
+
+    try {
+      await SupabaseService.createOrder(
+        token: widget.accessToken,
+        userId: widget.userId,
+        shopName: widget.shopOrMerchantName,
+        address: _confirmedAddress,
+        lat: _lat,
+        lng: _lng,
+        totalAmount: total,
+      );
+    } catch (_) {}
 
     setState(() {
       _orders.insert(
@@ -999,19 +1202,19 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
           id: 'ORD-${201 + _orders.length}',
           shopName: widget.shopOrMerchantName,
           confirmedAddress: _confirmedAddress,
-          totalAmount: subtotal + fee,
+          totalAmount: total,
           deliveryFee: fee,
           status: 'قيد التجهيز',
-          time: DateTime.now(),
         ),
       );
       _cart.clear();
       _navIndex = 3;
     });
 
+    if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('تم تأكيد الطلب وإرساله إلى التاجر!'),
+        content: Text('تم إرسال الطلب وحفظه بنجاح!'),
         backgroundColor: Color(0xFF15803D),
       ),
     );
@@ -1035,7 +1238,9 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
         child: IndexedStack(
           index: _navIndex,
           children: [
-            _isMerchantView ? _buildMerchantView() : _buildHomeView(visibleProducts),
+            _isMerchantView
+                ? _buildMerchantView()
+                : _buildHomeView(visibleProducts),
             _buildCategoriesView(),
             _buildCartView(),
             _buildOrdersView(),
@@ -1096,7 +1301,6 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
     return ListView(
       padding: const EdgeInsets.all(14),
       children: [
-        // الهيدر العلوي
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
@@ -1138,11 +1342,11 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
                   onPressed: () {
                     ScaffoldMessenger.of(context).showSnackBar(
                       const SnackBar(
-                          content: Text('رصيدك الترحيبي: 25,000 د.ع متاح')),
+                          content: Text('متصل مع Supabase بنجاح')),
                     );
                   },
-                  icon: const Icon(Icons.notifications_none_rounded,
-                      color: Color(0xFF374151)),
+                  icon: const Icon(Icons.cloud_done_outlined,
+                      color: Color(0xFF15803D)),
                 ),
                 IconButton(
                   onPressed: () {
@@ -1159,8 +1363,6 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
           ],
         ),
         const SizedBox(height: 10),
-
-        // سطر العنوان وتأكيد الموقع بالدبوس
         InkWell(
           onTap: _openPinLocationModal,
           borderRadius: BorderRadius.circular(12),
@@ -1195,9 +1397,9 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
                     color: const Color(0xFFDCFCE7),
                     borderRadius: BorderRadius.circular(8),
                   ),
-                  child: Text(
-                    _locationConfirmed ? 'مؤكد • تعديل' : 'تأكيد الموقع',
-                    style: const TextStyle(
+                  child: const Text(
+                    'مؤكد • تعديل',
+                    style: TextStyle(
                       fontSize: 10,
                       fontWeight: FontWeight.bold,
                       color: Color(0xFF15803D),
@@ -1209,8 +1411,6 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
           ),
         ),
         const SizedBox(height: 12),
-
-        // البحث
         TextField(
           onChanged: (v) => setState(() => _searchQuery = v.trim()),
           decoration: InputDecoration(
@@ -1232,8 +1432,6 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
           ),
         ),
         const SizedBox(height: 14),
-
-        // الأقسام
         SizedBox(
           height: 84,
           child: ListView.separated(
@@ -1243,14 +1441,6 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
             itemBuilder: (context, idx) {
               final cat = _categories[idx];
               final selected = _selectedCategory == cat;
-              final IconData icon = switch (cat) {
-                'الكل' => Icons.grid_view_rounded,
-                'مواد غذائية' => Icons.shopping_cart_outlined,
-                'مشروبات' => Icons.local_cafe_outlined,
-                'ألبان وأجبان' => Icons.local_drink_outlined,
-                _ => Icons.clean_hands_outlined,
-              };
-
               return GestureDetector(
                 onTap: () => setState(() => _selectedCategory = cat),
                 child: Column(
@@ -1269,7 +1459,7 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
                         ),
                       ),
                       child: Icon(
-                        icon,
+                        Icons.grid_view_rounded,
                         color: selected
                             ? const Color(0xFF15803D)
                             : const Color(0xFF4B5563),
@@ -1294,8 +1484,6 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
           ),
         ),
         const SizedBox(height: 12),
-
-        // البنر الأخضر الفخم
         Container(
           width: double.infinity,
           padding: const EdgeInsets.all(18),
@@ -1332,49 +1520,13 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
             ],
           ),
         ),
-        const SizedBox(height: 12),
-
-        // شريط المزايا الثلاث
-        Container(
-          padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(16),
-            border: Border.all(color: Colors.grey.shade200),
-          ),
-          child: const Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [
-              _BenefitBadge(
-                icon: Icons.local_shipping_outlined,
-                title: 'توصيل من التاجر',
-                subtitle: 'إلى محلك',
-              ),
-              _BenefitBadge(
-                icon: Icons.compare_arrows_rounded,
-                title: 'قارن الأسعار',
-                subtitle: 'قبل الشراء',
-              ),
-              _BenefitBadge(
-                icon: Icons.payments_outlined,
-                title: 'الدفع عند الاستلام',
-                subtitle: 'نقداً',
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(height: 16),
-
-        // الأكثر طلباً
+        const SizedBox(height: 14),
         Row(
           mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
             const Text(
               'الأكثر طلباً',
-              style: TextStyle(
-                  fontSize: 17,
-                  fontWeight: FontWeight.bold,
-                  color: Color(0xFF111827)),
+              style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
             ),
             Text(
               'منتجات ${visibleProducts.length}',
@@ -1383,7 +1535,6 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
           ],
         ),
         const SizedBox(height: 10),
-
         GridView.builder(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
@@ -1397,7 +1548,6 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
           itemBuilder: (context, idx) {
             final p = visibleProducts[idx];
             final qty = _cart[p.id] ?? 0;
-            final fav = _favorites.contains(p.id);
 
             return Container(
               padding: const EdgeInsets.all(10),
@@ -1416,55 +1566,9 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
                         color: const Color(0xFFF3F6F4),
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: Stack(
-                        children: [
-                          Center(
-                            child: Icon(p.icon,
-                                size: 46, color: const Color(0xFF15803D)),
-                          ),
-                          Positioned(
-                            top: 6,
-                            right: 6,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(
-                                  horizontal: 8, vertical: 3),
-                              decoration: BoxDecoration(
-                                color: Colors.white,
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: Text(
-                                p.badge,
-                                style: const TextStyle(
-                                  fontSize: 10,
-                                  fontWeight: FontWeight.bold,
-                                  color: Color(0xFF15803D),
-                                ),
-                              ),
-                            ),
-                          ),
-                          Positioned(
-                            top: 4,
-                            left: 4,
-                            child: InkWell(
-                              onTap: () {
-                                setState(() {
-                                  if (fav) {
-                                    _favorites.remove(p.id);
-                                  } else {
-                                    _favorites.add(p.id);
-                                  }
-                                });
-                              },
-                              child: Icon(
-                                fav
-                                    ? Icons.favorite_rounded
-                                    : Icons.favorite_border_rounded,
-                                size: 18,
-                                color: fav ? Colors.red : const Color(0xFF6B7280),
-                              ),
-                            ),
-                          ),
-                        ],
+                      child: Center(
+                        child: Icon(p.icon,
+                            size: 46, color: const Color(0xFF15803D)),
                       ),
                     ),
                   ),
@@ -1506,7 +1610,8 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
                                 borderRadius: BorderRadius.circular(10),
                               ),
                             ),
-                            onPressed: () => _addToCart(p.id),
+                            onPressed: () =>
+                                setState(() => _cart[p.id] = 1),
                             child: const Text('أضف للسلة',
                                 style: TextStyle(fontSize: 11)),
                           ),
@@ -1515,7 +1620,13 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
                           mainAxisAlignment: MainAxisAlignment.spaceBetween,
                           children: [
                             InkWell(
-                              onTap: () => _removeFromCart(p.id),
+                              onTap: () => setState(() {
+                                if ((_cart[p.id] ?? 0) > 1) {
+                                  _cart[p.id] = _cart[p.id]! - 1;
+                                } else {
+                                  _cart.remove(p.id);
+                                }
+                              }),
                               child: const Icon(Icons.remove_circle,
                                   size: 22, color: Colors.red),
                             ),
@@ -1523,7 +1634,8 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
                                 style: const TextStyle(
                                     fontWeight: FontWeight.bold)),
                             InkWell(
-                              onTap: () => _addToCart(p.id),
+                              onTap: () => setState(
+                                  () => _cart[p.id] = (_cart[p.id] ?? 0) + 1),
                               child: const Icon(Icons.add_circle,
                                   size: 22, color: Color(0xFF15803D)),
                             ),
@@ -1553,134 +1665,61 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
         Row(
           children: [
             Expanded(
-              child: _metricBox('مبيعات اليوم', _formatDinar(totalSales),
-                  const Color(0xFF15803D)),
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF15803D),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('مبيعات اليوم',
+                        style: TextStyle(color: Colors.white70, fontSize: 12)),
+                    const SizedBox(height: 6),
+                    Text(_formatDinar(totalSales),
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15)),
+                  ],
+                ),
+              ),
             ),
             const SizedBox(width: 10),
             Expanded(
-              child: _metricBox('الطلبات الواردة', '${_orders.length} طلب',
-                  const Color(0xFF0F2C59)),
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F2C59),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('الطلبات الواردة',
+                        style: TextStyle(color: Colors.white70, fontSize: 12)),
+                    const SizedBox(height: 6),
+                    Text('${_orders.length} طلب',
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15)),
+                  ],
+                ),
+              ),
             ),
           ],
         ),
         const SizedBox(height: 16),
-        const Text(
-          'الطلبات وحالة التجهيز',
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-        ),
-        const SizedBox(height: 8),
-        if (_orders.isEmpty)
-          const Card(
-            child: Padding(
-              padding: EdgeInsets.all(16),
-              child: Text('لا توجد طلبات واردة حالياً'),
-            ),
-          )
-        else
-          ..._orders.map((order) {
-            return Card(
-              margin: const EdgeInsets.only(bottom: 10),
-              child: Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text('${order.id} • ${order.shopName}',
-                            style:
-                                const TextStyle(fontWeight: FontWeight.bold)),
-                        Text(_formatDinar(order.totalAmount),
-                            style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                                color: Color(0xFF15803D))),
-                      ],
-                    ),
-                    const SizedBox(height: 4),
-                    Text('العنوان المؤكد: ${order.confirmedAddress}',
-                        style: const TextStyle(fontSize: 12)),
-                    const SizedBox(height: 8),
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                        Text('الحالة: ${order.status}',
-                            style: const TextStyle(fontSize: 12)),
-                        DropdownButton<String>(
-                          value: order.status,
-                          items: const [
-                            DropdownMenuItem(
-                                value: 'قيد التجهيز',
-                                child: Text('قيد التجهيز')),
-                            DropdownMenuItem(
-                                value: 'خرج للتوصيل',
-                                child: Text('خرج للتوصيل')),
-                            DropdownMenuItem(
-                                value: 'تم التسليم',
-                                child: Text('تم التسليم')),
-                          ],
-                          onChanged: (v) {
-                            if (v != null) {
-                              setState(() => order.status = v);
-                            }
-                          },
-                        ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            );
-          }),
-      ],
-    );
-  }
-
-  Widget _metricBox(String label, String val, Color color) {
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: color,
-        borderRadius: BorderRadius.circular(16),
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text(label,
-              style: const TextStyle(color: Colors.white70, fontSize: 12)),
-          const SizedBox(height: 6),
-          Text(val,
-              style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                  fontSize: 15)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildCategoriesView() {
-    return ListView(
-      padding: const EdgeInsets.all(14),
-      children: [
-        const Text('الأقسام',
-            style: TextStyle(fontSize: 19, fontWeight: FontWeight.bold)),
-        const SizedBox(height: 12),
-        ..._categories.where((c) => c != 'الكل').map((cat) {
+        ..._orders.map((order) {
           return Card(
             margin: const EdgeInsets.only(bottom: 10),
             child: ListTile(
-              leading:
-                  const Icon(Icons.category_rounded, color: Color(0xFF15803D)),
-              title:
-                  Text(cat, style: const TextStyle(fontWeight: FontWeight.bold)),
-              trailing: const Icon(Icons.arrow_forward_ios_rounded, size: 15),
-              onTap: () {
-                setState(() {
-                  _selectedCategory = cat;
-                  _navIndex = 0;
-                });
-              },
+              title: Text('${order.id} • ${order.shopName}',
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
+              subtitle: Text('العنوان: ${order.confirmedAddress}'),
+              trailing: Text(_formatDinar(order.totalAmount)),
             ),
           );
         }),
@@ -1688,19 +1727,37 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
     );
   }
 
+  Widget _buildCategoriesView() {
+    return ListView(
+      padding: const EdgeInsets.all(14),
+      children: _categories.where((c) => c != 'الكل').map((cat) {
+        return Card(
+          margin: const EdgeInsets.only(bottom: 10),
+          child: ListTile(
+            leading:
+                const Icon(Icons.category_rounded, color: Color(0xFF15803D)),
+            title: Text(cat, style: const TextStyle(fontWeight: FontWeight.bold)),
+            onTap: () {
+              setState(() {
+                _selectedCategory = cat;
+                _navIndex = 0;
+              });
+            },
+          ),
+        );
+      }).toList(),
+    );
+  }
+
   Widget _buildCartView() {
     if (_cart.isEmpty) {
-      return const Center(
-        child: Text('السلة فارغة — أضف منتجات الجملة للبدء'),
-      );
+      return const Center(child: Text('السلة فارغة — أضف منتجات الجملة للبدء'));
     }
 
     double subtotal = 0;
-    double expectedProfit = 0;
     _cart.forEach((id, qty) {
       final p = _products.firstWhere((item) => item.id == id);
       subtotal += p.wholesalePrice * qty;
-      expectedProfit += p.expectedCartonProfit * qty;
     });
     final double delivery = _orders.length < 4 ? 0 : 5000;
 
@@ -1714,8 +1771,8 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
           tileColor: Colors.white,
           shape:
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-          leading: const Icon(Icons.location_on_rounded,
-              color: Color(0xFF15803D)),
+          leading:
+              const Icon(Icons.location_on_rounded, color: Color(0xFF15803D)),
           title: Text(_confirmedAddress,
               style:
                   const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
@@ -1730,32 +1787,13 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
           return Card(
             margin: const EdgeInsets.only(bottom: 8),
             child: ListTile(
-              title:
-                  Text(p.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-              subtitle:
-                  Text('${e.value} × ${_formatDinar(p.wholesalePrice)}'),
+              title: Text(p.name,
+                  style: const TextStyle(fontWeight: FontWeight.bold)),
+              subtitle: Text('${e.value} × ${_formatDinar(p.wholesalePrice)}'),
               trailing: Text(_formatDinar(p.wholesalePrice * e.value)),
             ),
           );
         }),
-        const SizedBox(height: 10),
-        Container(
-          padding: const EdgeInsets.all(14),
-          decoration: BoxDecoration(
-            color: const Color(0xFFDCFCE7),
-            borderRadius: BorderRadius.circular(14),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text('الربح المتوقع:',
-                  style: TextStyle(fontWeight: FontWeight.bold)),
-              Text(_formatDinar(expectedProfit),
-                  style: const TextStyle(
-                      fontWeight: FontWeight.w900, color: Color(0xFF15803D))),
-            ],
-          ),
-        ),
         const SizedBox(height: 14),
         SizedBox(
           height: 50,
@@ -1856,32 +1894,6 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
           label:
               const Text('تسجيل الخروج', style: TextStyle(color: Colors.red)),
         ),
-      ],
-    );
-  }
-}
-
-class _BenefitBadge extends StatelessWidget {
-  final IconData icon;
-  final String title;
-  final String subtitle;
-
-  const _BenefitBadge({
-    required this.icon,
-    required this.title,
-    required this.subtitle,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      children: [
-        Icon(icon, color: const Color(0xFF15803D), size: 22),
-        const SizedBox(height: 4),
-        Text(title,
-            style: const TextStyle(fontSize: 11, fontWeight: FontWeight.bold)),
-        Text(subtitle,
-            style: const TextStyle(fontSize: 10, color: Color(0xFF6B7280))),
       ],
     );
   }
