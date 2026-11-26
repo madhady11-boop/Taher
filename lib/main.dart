@@ -4,9 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 
-// ==========================================
-// إعدادات مشروع Supabase
-// ==========================================
 class SouqConfig {
   static const String supabaseUrl = 'https://uaaxwivqzafevvqowdrx.supabase.co';
   static const String supabaseAnonKey =
@@ -46,9 +43,6 @@ class SouqAlJumlaOnlineApp extends StatelessWidget {
   }
 }
 
-// ==========================================
-// خدمة الاتصال مع Supabase
-// ==========================================
 class SupabaseService {
   static Map<String, String> _headers({String? accessToken}) {
     return {
@@ -236,10 +230,6 @@ class SupabaseService {
     );
   }
 }
-
-// ==========================================
-// 1. نماذج البيانات (Models)
-// ==========================================
 class WholesaleProduct {
   final String id;
   String name;
@@ -293,9 +283,6 @@ class MarketOrder {
   });
 }
 
-// ==========================================
-// 2. تسجيل الدخول
-// ==========================================
 class LuxuryLoginScreen extends StatefulWidget {
   const LuxuryLoginScreen({super.key});
 
@@ -514,9 +501,6 @@ class _LuxuryLoginScreenState extends State<LuxuryLoginScreen> {
   }
 }
 
-// ==========================================
-// 3. إنشاء حساب جديد
-// ==========================================
 class LuxuryRegisterScreen extends StatefulWidget {
   const LuxuryRegisterScreen({super.key});
 
@@ -827,9 +811,6 @@ class _LuxuryBrandMark extends StatelessWidget {
   }
 }
 
-// ==========================================
-// 4. نافذة التاجر لإضافة منتج جديد مع صورة وقسم وتفاصيل
-// ==========================================
 class AddProductBottomSheet extends StatefulWidget {
   final String merchantName;
   final List<String> categories;
@@ -950,8 +931,6 @@ class _AddProductBottomSheetState extends State<AddProductBottomSheet> {
               ],
             ),
             const SizedBox(height: 10),
-
-            // اختيار صورة المنتج
             GestureDetector(
               onTap: _pickProductImage,
               child: Container(
@@ -985,7 +964,6 @@ class _AddProductBottomSheetState extends State<AddProductBottomSheet> {
               ),
             ),
             const SizedBox(height: 12),
-
             TextField(
               controller: _nameCtrl,
               decoration: InputDecoration(
@@ -998,8 +976,6 @@ class _AddProductBottomSheetState extends State<AddProductBottomSheet> {
               ),
             ),
             const SizedBox(height: 10),
-
-            // اختيار القسم
             DropdownButtonFormField<String>(
               value: _selectedCategory,
               decoration: InputDecoration(
@@ -1019,7 +995,6 @@ class _AddProductBottomSheetState extends State<AddProductBottomSheet> {
               },
             ),
             const SizedBox(height: 10),
-
             Row(
               children: [
                 Expanded(
@@ -1056,7 +1031,6 @@ class _AddProductBottomSheetState extends State<AddProductBottomSheet> {
               ],
             ),
             const SizedBox(height: 10),
-
             Row(
               children: [
                 Expanded(
@@ -1091,7 +1065,6 @@ class _AddProductBottomSheetState extends State<AddProductBottomSheet> {
               ],
             ),
             const SizedBox(height: 10),
-
             if (unitCost > 0)
               Container(
                 padding: const EdgeInsets.all(10),
@@ -1108,7 +1081,6 @@ class _AddProductBottomSheetState extends State<AddProductBottomSheet> {
                 ),
               ),
             const SizedBox(height: 14),
-
             SizedBox(
               width: double.infinity,
               height: 50,
@@ -1135,9 +1107,6 @@ class _AddProductBottomSheetState extends State<AddProductBottomSheet> {
   }
 }
 
-// ==========================================
-// 5. تحديد عنوان المحل بالدبوس وتأكيد الموقع
-// ==========================================
 class PinLocationConfirmSheet extends StatefulWidget {
   final String currentAddress;
   final double initialLat;
@@ -1285,9 +1254,6 @@ class _PinLocationConfirmSheetState extends State<PinLocationConfirmSheet> {
   }
 }
 
-// ==========================================
-// 6. الشاشة الرئيسية (المشتري + قسم التاجر المتكامل)
-// ==========================================
 class LuxuryMainAppShell extends StatefulWidget {
   final String accessToken;
   final String userId;
@@ -1648,9 +1614,6 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
     );
   }
 
-  // ==========================================
-  // قسم التاجر المتكامل (إضافة منتجات + أقسام + إدارة الطلبات)
-  // ==========================================
   Widget _buildMerchantDashboard() {
     final totalSales =
         _orders.fold<double>(0, (sum, item) => sum + item.totalAmount);
@@ -1774,9 +1737,6 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
     );
   }
 
-  // ==========================================
-  // واجهة صاحب السوق (المشتري)
-  // ==========================================
   Widget _buildMarketHome(List<WholesaleProduct> visibleProducts) {
     return ListView(
       padding: const EdgeInsets.all(14),
@@ -2156,60 +2116,4 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
             title: Text('${o.id} • ${o.status}',
                 style: const TextStyle(fontWeight: FontWeight.bold)),
             subtitle: Text('العنوان: ${o.confirmedAddress}'),
-            trailing: Text(_formatDinar(o.totalAmount),
-                style: const TextStyle(
-                    fontWeight: FontWeight.bold, color: Color(0xFF15803D))),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _buildAccountView() {
-    return ListView(
-      padding: const EdgeInsets.all(16),
-      children: [
-        Container(
-          padding: const EdgeInsets.all(18),
-          decoration: BoxDecoration(
-            color: Colors.white,
-            borderRadius: BorderRadius.circular(18),
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(widget.userName,
-                  style: const TextStyle(
-                      fontSize: 19, fontWeight: FontWeight.bold)),
-              const SizedBox(height: 6),
-              Text('النشاط: ${widget.shopOrMerchantName}'),
-              Text('نوع الحساب: ${widget.accountRole}'),
-              Text('الهاتف: ${widget.phoneNumber}'),
-              Text('العنوان المؤكد: $_confirmedAddress'),
-            ],
-          ),
-        ),
-        const SizedBox(height: 12),
-        SwitchListTile(
-          value: _isMerchantView,
-          activeColor: const Color(0xFF15803D),
-          title: const Text('تفعيل قسم التاجر (رفع منتجات وأقسام)'),
-          onChanged: (val) => setState(() => _isMerchantView = val),
-        ),
-        const SizedBox(height: 10),
-        OutlinedButton.icon(
-          onPressed: () {
-            Navigator.pushAndRemoveUntil(
-              context,
-              MaterialPageRoute(builder: (_) => const LuxuryLoginScreen()),
-              (route) => false,
-            );
-          },
-          icon: const Icon(Icons.logout_rounded, color: Colors.red),
-          label:
-              const Text('تسجيل الخروج', style: TextStyle(color: Colors.red)),
-        ),
-      ],
-    );
-  }
-}
+            trailing: Text(_format
