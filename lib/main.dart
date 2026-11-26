@@ -1,6 +1,8 @@
 import 'dart:convert';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
 
 // ==========================================
 // إعدادات مشروع Supabase
@@ -45,7 +47,7 @@ class SouqAlJumlaOnlineApp extends StatelessWidget {
 }
 
 // ==========================================
-// خدمة الاتصال مع Supabase (REST & Auth API)
+// خدمة الاتصال مع Supabase
 // ==========================================
 class SupabaseService {
   static Map<String, String> _headers({String? accessToken}) {
@@ -62,7 +64,6 @@ class SupabaseService {
     return 'iq_$digits@souqaljumla.iq';
   }
 
-  // تسجيل حساب جديد
   static Future> signUp({
     required String fullName,
     required String businessName,
@@ -91,7 +92,8 @@ class SupabaseService {
 
     final data = jsonDecode(res.body);
     if (res.statusCode >= 400) {
-      throw Exception(data['msg'] ?? data['error_description'] ?? 'فشل إنشاء الحساب');
+      throw Exception(
+          data['msg'] ?? data['error_description'] ?? 'فشل إنشاء الحساب');
     }
 
     final token = data['access_token'] as String?;
@@ -125,7 +127,6 @@ class SupabaseService {
     };
   }
 
-  // تسجيل الدخول
   static Future> signIn({
     required String phone,
     required String password,
@@ -145,11 +146,14 @@ class SupabaseService {
 
     final data = jsonDecode(res.body);
     if (res.statusCode >= 400) {
-      throw Exception(data['error_description'] ?? data['msg'] ?? 'بيانات الدخول غير صحيحة');
+      throw Exception(data['error_description'] ??
+          data['msg'] ??
+          'بيانات الدخول غير صحيحة');
     }
 
     final token = data['access_token'] as String;
-    final meta = (data['user']?['user_metadata'] as Map<String, dynamic>?) ?? {};
+    final meta =
+        (data['user']?['user_metadata'] as Map<String, dynamic>?) ?? {};
 
     return {
       'token': token,
@@ -161,7 +165,6 @@ class SupabaseService {
     };
   }
 
-  // جلب المنتجات من Supabase
   static Future<List<WholesaleProduct>> fetchProducts(String token) async {
     final url = Uri.parse('${SouqConfig.supabaseUrl}/rest/v1/products?select=*');
     final res = await http.get(url, headers: _headers(accessToken: token));
@@ -180,12 +183,34 @@ class SupabaseService {
             double.tryParse(row['suggested_retail_price'].toString()) ?? 0,
         stock: int.tryParse(row['stock'].toString()) ?? 20,
         merchantName: (row['merchant_name'] ?? 'تاجر جملة - الناصرية').toString(),
+        imageBase64: row['image_base64']?.toString(),
         icon: Icons.inventory_2_rounded,
       );
     }).toList();
   }
 
-  // إرسال طلب جديد إلى Supabase
+  static Future<void> addProduct({
+    required String token,
+    required WholesaleProduct product,
+  }) async {
+    final url = Uri.parse('${SouqConfig.supabaseUrl}/rest/v1/products');
+    await http.post(
+      url,
+      headers: _headers(accessToken: token),
+      body: jsonEncode({
+        'name': product.name,
+        'category': product.category,
+        'badge': product.badge,
+        'items_per_carton': product.itemsPerCarton,
+        'wholesale_price': product.wholesalePrice,
+        'suggested_retail_price': product.suggestedRetailPrice,
+        'stock': product.stock,
+        'merchant_name': product.merchantName,
+        if (product.imageBase64 != null) 'image_base64': product.imageBase64,
+      }),
+    );
+  }
+
   static Future<void> createOrder({
     required String token,
     required String userId,
@@ -225,6 +250,8 @@ class WholesaleProduct {
   double suggestedRetailPrice;
   int stock;
   String merchantName;
+  String? localImagePath;
+  String? imageBase64;
   IconData icon;
 
   WholesaleProduct({
@@ -237,9 +264,13 @@ class WholesaleProduct {
     required this.suggestedRetailPrice,
     required this.stock,
     required this.merchantName,
+    this.localImagePath,
+    this.imageBase64,
     required this.icon,
   });
 
+  double get unitPrice =>
+      itemsPerCarton > 0 ? wholesalePrice / itemsPerCarton : wholesalePrice;
   double get expectedCartonProfit =>
       (suggestedRetailPrice * itemsPerCarton) - wholesalePrice;
 }
@@ -291,7 +322,8 @@ class _LuxuryLoginScreenState extends State<LuxuryLoginScreen> {
 
     setState(() => _isLoading = true);
     try {
-      final session = await SupabaseService.signIn(phone: phone, password: pass);
+      final session =
+          await SupabaseService.signIn(phone: phone, password: pass);
       if (!mounted) return;
       Navigator.pushReplacement(
         context,
@@ -594,7 +626,7 @@ class _LuxuryRegisterScreenState extends State<LuxuryRegisterScreen> {
                       ),
                       const SizedBox(height: 4),
                       const Text(
-                        'أرسل طلب الانضمام إلى سوق الجملة',
+                        'اختر نوع حسابك (صاحب سوق أو تاجر جملة)',
                         style:
                             TextStyle(fontSize: 13, color: Color(0xFF6B7280)),
                       ),
@@ -617,7 +649,7 @@ class _LuxuryRegisterScreenState extends State<LuxuryRegisterScreen> {
                       TextField(
                         controller: _businessCtrl,
                         decoration: InputDecoration(
-                          hintText: 'اسم المحل أو النشاط التجاري',
+                          hintText: 'اسم المحل أو شركة الجملة',
                           prefixIcon: const Icon(Icons.storefront_outlined,
                               color: Color(0xFF15803D)),
                           filled: true,
@@ -651,9 +683,10 @@ class _LuxuryRegisterScreenState extends State<LuxuryRegisterScreen> {
                         ),
                         items: const [
                           DropdownMenuItem(
-                              value: 'صاحب سوق', child: Text('صاحب سوق')),
+                              value: 'صاحب سوق', child: Text('صاحب سوق (مشتري)')),
                           DropdownMenuItem(
-                              value: 'تاجر جملة', child: Text('تاجر جملة')),
+                              value: 'تاجر جملة',
+                              child: Text('تاجر جملة (مورد بضاعة)')),
                         ],
                         onChanged: (v) {
                           if (v != null) setState(() => _selectedRole = v);
@@ -795,7 +828,315 @@ class _LuxuryBrandMark extends StatelessWidget {
 }
 
 // ==========================================
-// 4. تحديد عنوان المحل بالدبوس وتأكيد الموقع
+// 4. نافذة التاجر لإضافة منتج جديد مع صورة وقسم وتفاصيل
+// ==========================================
+class AddProductBottomSheet extends StatefulWidget {
+  final String merchantName;
+  final List<String> categories;
+  final Future<void> Function(WholesaleProduct newProduct) onProductAdded;
+
+  const AddProductBottomSheet({
+    super.key,
+    required this.merchantName,
+    required this.categories,
+    required this.onProductAdded,
+  });
+
+  @override
+  State<AddProductBottomSheet> createState() => _AddProductBottomSheetState();
+}
+
+class _AddProductBottomSheetState extends State<AddProductBottomSheet> {
+  final TextEditingController _nameCtrl = TextEditingController();
+  final TextEditingController _wholesaleCtrl = TextEditingController();
+  final TextEditingController _piecesCtrl = TextEditingController(text: '12');
+  final TextEditingController _retailCtrl = TextEditingController();
+  final TextEditingController _stockCtrl = TextEditingController(text: '50');
+  late String _selectedCategory;
+  File? _pickedImage;
+  String? _imageBase64;
+  bool _saving = false;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedCategory = widget.categories.firstWhere(
+      (c) => c != 'الكل',
+      orElse: () => 'مواد غذائية',
+    );
+  }
+
+  Future<void> _pickProductImage() async {
+    final picker = ImagePicker();
+    final XFile? file = await picker.pickImage(
+      source: ImageSource.gallery,
+      maxWidth: 600,
+      imageQuality: 70,
+    );
+    if (file != null) {
+      final bytes = await file.readAsBytes();
+      setState(() {
+        _pickedImage = File(file.path);
+        _imageBase64 = base64Encode(bytes);
+      });
+    }
+  }
+
+  Future<void> _save() async {
+    final name = _nameCtrl.text.trim();
+    final wholesale = double.tryParse(_wholesaleCtrl.text.trim()) ?? 0;
+    final pieces = int.tryParse(_piecesCtrl.text.trim()) ?? 1;
+    final retail = double.tryParse(_retailCtrl.text.trim()) ?? 0;
+    final stock = int.tryParse(_stockCtrl.text.trim()) ?? 20;
+
+    if (name.isEmpty || wholesale <= 0 || pieces <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+            content: Text('يرجى إدخال اسم المنتج وسعر الجملة وعدد القطع')),
+      );
+      return;
+    }
+
+    setState(() => _saving = true);
+
+    final product = WholesaleProduct(
+      id: 'P_${DateTime.now().millisecondsSinceEpoch}',
+      name: '$name ($pieces قطعة)',
+      category: _selectedCategory,
+      badge: 'جديد',
+      itemsPerCarton: pieces,
+      wholesalePrice: wholesale,
+      suggestedRetailPrice: retail > 0 ? retail : (wholesale / pieces) * 1.15,
+      stock: stock,
+      merchantName: widget.merchantName,
+      localImagePath: _pickedImage?.path,
+      imageBase64: _imageBase64,
+      icon: Icons.inventory_2_rounded,
+    );
+
+    await widget.onProductAdded(product);
+    if (mounted) Navigator.pop(context);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final double wholesale = double.tryParse(_wholesaleCtrl.text.trim()) ?? 0;
+    final int pieces = int.tryParse(_piecesCtrl.text.trim()) ?? 1;
+    final double unitCost = pieces > 0 ? wholesale / pieces : 0;
+
+    return Padding(
+      padding: EdgeInsets.only(
+        bottom: MediaQuery.of(context).viewInsets.bottom + 18,
+        top: 18,
+        left: 18,
+        right: 18,
+      ),
+      child: SingleChildScrollView(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                const Text(
+                  'إضافة منتج جديد للسوق',
+                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w900),
+                ),
+                IconButton(
+                  icon: const Icon(Icons.close_rounded),
+                  onPressed: () => Navigator.pop(context),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+
+            // اختيار صورة المنتج
+            GestureDetector(
+              onTap: _pickProductImage,
+              child: Container(
+                height: 130,
+                width: double.infinity,
+                decoration: BoxDecoration(
+                  color: const Color(0xFFECFDF5),
+                  borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                      color: const Color(0xFF15803D).withOpacity(0.4)),
+                ),
+                child: _pickedImage != null
+                    ? ClipRRect(
+                        borderRadius: BorderRadius.circular(15),
+                        child: Image.file(_pickedImage!, fit: BoxFit.cover),
+                      )
+                    : const Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.add_a_photo_rounded,
+                              size: 36, color: Color(0xFF15803D)),
+                          SizedBox(height: 6),
+                          Text(
+                            'اضغط لرفع صورة المنتج من الجهاز',
+                            style: TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: Color(0xFF15803D)),
+                          ),
+                        ],
+                      ),
+              ),
+            ),
+            const SizedBox(height: 12),
+
+            TextField(
+              controller: _nameCtrl,
+              decoration: InputDecoration(
+                labelText: 'اسم المنتج (مثال: زيت عافية 1 لتر)',
+                filled: true,
+                fillColor: const Color(0xFFF3F6F4),
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide.none),
+              ),
+            ),
+            const SizedBox(height: 10),
+
+            // اختيار القسم
+            DropdownButtonFormField<String>(
+              value: _selectedCategory,
+              decoration: InputDecoration(
+                labelText: 'القسم',
+                filled: true,
+                fillColor: const Color(0xFFF3F6F4),
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(14),
+                    borderSide: BorderSide.none),
+              ),
+              items: widget.categories
+                  .where((c) => c != 'الكل')
+                  .map((c) => DropdownMenuItem(value: c, child: Text(c)))
+                  .toList(),
+              onChanged: (v) {
+                if (v != null) setState(() => _selectedCategory = v);
+              },
+            ),
+            const SizedBox(height: 10),
+
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _wholesaleCtrl,
+                    keyboardType: TextInputType.number,
+                    onChanged: (_) => setState(() {}),
+                    decoration: InputDecoration(
+                      labelText: 'سعر الكرتون بالجملة (د.ع)',
+                      filled: true,
+                      fillColor: const Color(0xFFF3F6F4),
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(14),
+                          borderSide: BorderSide.none),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: TextField(
+                    controller: _piecesCtrl,
+                    keyboardType: TextInputType.number,
+                    onChanged: (_) => setState(() {}),
+                    decoration: InputDecoration(
+                      labelText: 'عدد القطع بالداخل',
+                      filled: true,
+                      fillColor: const Color(0xFFF3F6F4),
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(14),
+                          borderSide: BorderSide.none),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+
+            Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _retailCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: InputDecoration(
+                      labelText: 'سعر بيع القطعة المقترح',
+                      filled: true,
+                      fillColor: const Color(0xFFF3F6F4),
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(14),
+                          borderSide: BorderSide.none),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: TextField(
+                    controller: _stockCtrl,
+                    keyboardType: TextInputType.number,
+                    decoration: InputDecoration(
+                      labelText: 'الكمية بالمخزن (كرتون)',
+                      filled: true,
+                      fillColor: const Color(0xFFF3F6F4),
+                      border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(14),
+                          borderSide: BorderSide.none),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+
+            if (unitCost > 0)
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFDCFCE7),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  'سعر القطعة الواحدة على صاحب السوق: ${unitCost.toStringAsFixed(0)} د.ع',
+                  style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                      color: Color(0xFF15803D)),
+                ),
+              ),
+            const SizedBox(height: 14),
+
+            SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: ElevatedButton.icon(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFF15803D),
+                  foregroundColor: Colors.white,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(14)),
+                ),
+                onPressed: _saving ? null : _save,
+                icon: const Icon(Icons.publish_rounded),
+                label: Text(
+                  _saving ? 'جاري النشر...' : 'نشر المنتج في سوق الجملة',
+                  style: const TextStyle(
+                      fontSize: 15, fontWeight: FontWeight.bold),
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ==========================================
+// 5. تحديد عنوان المحل بالدبوس وتأكيد الموقع
 // ==========================================
 class PinLocationConfirmSheet extends StatefulWidget {
   final String currentAddress;
@@ -837,13 +1178,6 @@ class _PinLocationConfirmSheetState extends State<PinLocationConfirmSheet> {
     _addrCtrl = TextEditingController(text: widget.currentAddress);
   }
 
-  void _movePin(double dLat, double dLng) {
-    setState(() {
-      _lat += dLat;
-      _lng += dLng;
-    });
-  }
-
   @override
   Widget build(BuildContext context) {
     return Padding(
@@ -857,20 +1191,11 @@ class _PinLocationConfirmSheetState extends State<PinLocationConfirmSheet> {
         mainAxisSize: MainAxisSize.min,
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              const Text(
-                'تحديد عنوان المحل بالدبوس وتأكيد الموقع',
-                style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-              ),
-              IconButton(
-                icon: const Icon(Icons.close_rounded),
-                onPressed: () => Navigator.pop(context),
-              ),
-            ],
+          const Text(
+            'تحديد عنوان المحل بالدبوس وتأكيد الموقع',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
           ),
-          const SizedBox(height: 8),
+          const SizedBox(height: 10),
           SingleChildScrollView(
             scrollDirection: Axis.horizontal,
             child: Row(
@@ -901,64 +1226,32 @@ class _PinLocationConfirmSheetState extends State<PinLocationConfirmSheet> {
           ),
           const SizedBox(height: 12),
           Container(
-            height: 170,
+            height: 140,
             width: double.infinity,
             decoration: BoxDecoration(
               color: const Color(0xFFE6F4EA),
               borderRadius: BorderRadius.circular(18),
-              border:
-                  Border.all(color: const Color(0xFF15803D).withOpacity(0.3)),
             ),
-            child: Stack(
-              children: [
-                Center(
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      const Icon(Icons.location_on_rounded,
-                          color: Color(0xFF15803D), size: 46),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 10, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: Text(
-                          'الدبوس: ${_lat.toStringAsFixed(4)}, ${_lng.toStringAsFixed(4)}',
-                          style: const TextStyle(
-                              fontSize: 11, fontWeight: FontWeight.bold),
-                        ),
-                      ),
-                    ],
+            child: Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.location_on_rounded,
+                      color: Color(0xFF15803D), size: 44),
+                  Text(
+                    'الدبوس: ${_lat.toStringAsFixed(4)}, ${_lng.toStringAsFixed(4)}',
+                    style: const TextStyle(
+                        fontSize: 11, fontWeight: FontWeight.bold),
                   ),
-                ),
-                Positioned(
-                  bottom: 8,
-                  left: 8,
-                  child: Row(
-                    children: [
-                      _pinBtn(Icons.arrow_upward, () => _movePin(0.0015, 0)),
-                      const SizedBox(width: 4),
-                      _pinBtn(
-                          Icons.arrow_downward, () => _movePin(-0.0015, 0)),
-                      const SizedBox(width: 4),
-                      _pinBtn(Icons.arrow_back, () => _movePin(0, -0.0015)),
-                      const SizedBox(width: 4),
-                      _pinBtn(Icons.arrow_forward, () => _movePin(0, 0.0015)),
-                    ],
-                  ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
           const SizedBox(height: 12),
           TextField(
             controller: _addrCtrl,
             decoration: InputDecoration(
-              labelText: 'تفاصيل العنوان (الشارع / أقرب نقطة دالة)',
-              prefixIcon:
-                  const Icon(Icons.pin_drop_rounded, color: Color(0xFF15803D)),
+              labelText: 'تفاصيل العنوان',
               filled: true,
               fillColor: const Color(0xFFF3F6F4),
               border: OutlineInputBorder(
@@ -979,41 +1272,21 @@ class _PinLocationConfirmSheetState extends State<PinLocationConfirmSheet> {
                     borderRadius: BorderRadius.circular(14)),
               ),
               onPressed: () {
-                final text = _addrCtrl.text.trim().isEmpty
-                    ? 'الناصرية - $_selectedZone'
-                    : _addrCtrl.text.trim();
-                widget.onConfirm(text, _lat, _lng);
+                widget.onConfirm(_addrCtrl.text.trim(), _lat, _lng);
                 Navigator.pop(context);
               },
               icon: const Icon(Icons.check_circle_rounded),
-              label: const Text(
-                'تأكيد الموقع وحفظ العنوان',
-                style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold),
-              ),
+              label: const Text('تأكيد الموقع وحفظ العنوان'),
             ),
           ),
         ],
       ),
     );
   }
-
-  Widget _pinBtn(IconData icon, VoidCallback onTap) {
-    return InkWell(
-      onTap: onTap,
-      child: Container(
-        padding: const EdgeInsets.all(6),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(8),
-        ),
-        child: Icon(icon, size: 16, color: const Color(0xFF15803D)),
-      ),
-    );
-  }
 }
 
 // ==========================================
-// 5. الشاشة الرئيسية المتصلة بـ Supabase
+// 6. الشاشة الرئيسية (المشتري + قسم التاجر المتكامل)
 // ==========================================
 class LuxuryMainAppShell extends StatefulWidget {
   final String accessToken;
@@ -1052,7 +1325,6 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
 
   String _selectedCategory = 'الكل';
   String _searchQuery = '';
-  final Set<String> _favorites = {};
   final Map<String, int> _cart = {};
   final List<MarketOrder> _orders = [];
 
@@ -1062,6 +1334,7 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
     'مشروبات',
     'ألبان وأجبان',
     'منظفات',
+    'بقوليات',
   ];
 
   List<WholesaleProduct> _products = [
@@ -1079,18 +1352,6 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
     ),
     WholesaleProduct(
       id: 'P2',
-      name: 'ملح مائدة ناعم - شدة 24 عبوة',
-      category: 'مواد غذائية',
-      badge: 'عروض 2',
-      itemsPerCarton: 24,
-      wholesalePrice: 12000,
-      suggestedRetailPrice: 750,
-      stock: 95,
-      merchantName: 'مخازن الفرات للجملة',
-      icon: Icons.grain_rounded,
-    ),
-    WholesaleProduct(
-      id: 'P3',
       name: 'زيت طعام نقي - كرتون 12 عبوة',
       category: 'مواد غذائية',
       badge: 'عروض 4',
@@ -1100,18 +1361,6 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
       stock: 40,
       merchantName: 'تاجر جملة - الناصرية',
       icon: Icons.water_drop_rounded,
-    ),
-    WholesaleProduct(
-      id: 'P4',
-      name: 'شاي ومرطبات - كرتون 24 علبة',
-      category: 'مشروبات',
-      badge: 'عروض 2',
-      itemsPerCarton: 24,
-      wholesalePrice: 110000,
-      suggestedRetailPrice: 5500,
-      stock: 28,
-      merchantName: 'توزيع الجنوب',
-      icon: Icons.local_drink_rounded,
     ),
   ];
 
@@ -1142,6 +1391,71 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
     return '$formatted د.ع';
   }
 
+  void _openAddProductSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (_) => AddProductBottomSheet(
+        merchantName: widget.shopOrMerchantName,
+        categories: _categories,
+        onProductAdded: (newProduct) async {
+          try {
+            await SupabaseService.addProduct(
+              token: widget.accessToken,
+              product: newProduct,
+            );
+          } catch (_) {}
+          if (mounted) {
+            setState(() {
+              _products.insert(0, newProduct);
+            });
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text('تمت إضافة المنتج ونشره لأصحاب الأسواق بنجاح!'),
+                backgroundColor: Color(0xFF15803D),
+              ),
+            );
+          }
+        },
+      ),
+    );
+  }
+
+  void _openAddCategoryDialog() {
+    final ctrl = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('إضافة قسم جديد'),
+        content: TextField(
+          controller: ctrl,
+          decoration: const InputDecoration(hintText: 'اسم القسم (مثال: حلويات)'),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+          ElevatedButton(
+            style: ElevatedButton.styleFrom(
+              backgroundColor: const Color(0xFF15803D),
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () {
+              final text = ctrl.text.trim();
+              if (text.isNotEmpty && !_categories.contains(text)) {
+                setState(() => _categories.add(text));
+              }
+              Navigator.pop(ctx);
+            },
+            child: const Text('إضافة'),
+          ),
+        ],
+      ),
+    );
+  }
+
   void _openPinLocationModal() {
     showModalBottomSheet(
       context: context,
@@ -1159,12 +1473,6 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
             _lat = newLat;
             _lng = newLng;
           });
-          ScaffoldMessenger.of(context).showSnackBar(
-            SnackBar(
-              content: Text('تم تأكيد الموقع: $addr'),
-              backgroundColor: const Color(0xFF15803D),
-            ),
-          );
         },
       ),
     );
@@ -1214,9 +1522,39 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
       const SnackBar(
-        content: Text('تم إرسال الطلب وحفظه بنجاح!'),
+        content: Text('تم إرسال الطلب بنجاح!'),
         backgroundColor: Color(0xFF15803D),
       ),
+    );
+  }
+
+  Widget _buildProductThumbnail(WholesaleProduct p) {
+    if (p.localImagePath != null) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(12),
+        child: Image.file(
+          File(p.localImagePath!),
+          width: double.infinity,
+          height: double.infinity,
+          fit: BoxFit.cover,
+        ),
+      );
+    }
+    if (p.imageBase64 != null && p.imageBase64!.isNotEmpty) {
+      try {
+        return ClipRRect(
+          borderRadius: BorderRadius.circular(12),
+          child: Image.memory(
+            base64Decode(p.imageBase64!),
+            width: double.infinity,
+            height: double.infinity,
+            fit: BoxFit.cover,
+          ),
+        );
+      } catch (_) {}
+    }
+    return Center(
+      child: Icon(p.icon, size: 46, color: const Color(0xFF15803D)),
     );
   }
 
@@ -1239,8 +1577,8 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
           index: _navIndex,
           children: [
             _isMerchantView
-                ? _buildMerchantView()
-                : _buildHomeView(visibleProducts),
+                ? _buildMerchantDashboard()
+                : _buildMarketHome(visibleProducts),
             _buildCategoriesView(),
             _buildCartView(),
             _buildOrdersView(),
@@ -1248,6 +1586,16 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
           ],
         ),
       ),
+      floatingActionButton: _isMerchantView
+          ? FloatingActionButton.extended(
+              onPressed: _openAddProductSheet,
+              backgroundColor: const Color(0xFF15803D),
+              foregroundColor: Colors.white,
+              icon: const Icon(Icons.add_a_photo_rounded),
+              label: const Text('إضافة منتج + صورة',
+                  style: TextStyle(fontWeight: FontWeight.bold)),
+            )
+          : null,
       bottomNavigationBar: BottomNavigationBar(
         currentIndex: _navIndex,
         type: BottomNavigationBarType.fixed,
@@ -1260,9 +1608,12 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
         onTap: (idx) => setState(() => _navIndex = idx),
         items: [
           BottomNavigationBarItem(
-            icon: const Icon(Icons.home_outlined),
-            activeIcon: const Icon(Icons.home_rounded),
-            label: _isMerchantView ? 'التاجر' : 'الرئيسية',
+            icon: Icon(_isMerchantView
+                ? Icons.storefront_outlined
+                : Icons.home_outlined),
+            activeIcon: Icon(
+                _isMerchantView ? Icons.storefront_rounded : Icons.home_rounded),
+            label: _isMerchantView ? 'قسم التاجر' : 'الرئيسية',
           ),
           const BottomNavigationBarItem(
             icon: Icon(Icons.grid_view_outlined),
@@ -1297,7 +1648,136 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
     );
   }
 
-  Widget _buildHomeView(List<WholesaleProduct> visibleProducts) {
+  // ==========================================
+  // قسم التاجر المتكامل (إضافة منتجات + أقسام + إدارة الطلبات)
+  // ==========================================
+  Widget _buildMerchantDashboard() {
+    final totalSales =
+        _orders.fold<double>(0, (sum, item) => sum + item.totalAmount);
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(14, 14, 14, 80),
+      children: [
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  widget.shopOrMerchantName,
+                  style: const TextStyle(
+                      fontSize: 19, fontWeight: FontWeight.w900),
+                ),
+                const Text(
+                  'قسم تاجر الجملة • إدارة البضاعة والأسعار',
+                  style: TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
+                ),
+              ],
+            ),
+            OutlinedButton.icon(
+              onPressed: _openAddCategoryDialog,
+              icon: const Icon(Icons.create_new_folder_outlined,
+                  size: 18, color: Color(0xFF15803D)),
+              label: const Text('إضافة قسم',
+                  style: TextStyle(color: Color(0xFF15803D), fontSize: 12)),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        Row(
+          children: [
+            Expanded(
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF15803D),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('إجمالي المبيعات',
+                        style: TextStyle(color: Colors.white70, fontSize: 12)),
+                    const SizedBox(height: 6),
+                    Text(_formatDinar(totalSales),
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15)),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0F2C59),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('منتجاتك المعروضة',
+                        style: TextStyle(color: Colors.white70, fontSize: 12)),
+                    const SizedBox(height: 6),
+                    Text('${_products.length} صنف',
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 15)),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 16),
+        const Text(
+          'منتجاتي في سوق الجملة',
+          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+        ),
+        const SizedBox(height: 8),
+        ..._products.map((p) {
+          return Card(
+            margin: const EdgeInsets.only(bottom: 10),
+            shape:
+                RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+            child: ListTile(
+              leading: SizedBox(
+                width: 52,
+                height: 52,
+                child: _buildProductThumbnail(p),
+              ),
+              title: Text(p.name,
+                  style: const TextStyle(
+                      fontWeight: FontWeight.bold, fontSize: 13)),
+              subtitle: Text(
+                'القسم: ${p.category} • العدد: ${p.itemsPerCarton} قطعة\nسعر الكرتون: ${_formatDinar(p.wholesalePrice)} (القطعة: ${_formatDinar(p.unitPrice)})',
+                style: const TextStyle(fontSize: 11),
+              ),
+              isThreeLine: true,
+              trailing: Text(
+                'مخزون:\n${p.stock}',
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                    fontWeight: FontWeight.bold,
+                    fontSize: 11,
+                    color: Color(0xFF15803D)),
+              ),
+            ),
+          );
+        }),
+      ],
+    );
+  }
+
+  // ==========================================
+  // واجهة صاحب السوق (المشتري)
+  // ==========================================
+  Widget _buildMarketHome(List<WholesaleProduct> visibleProducts) {
     return ListView(
       padding: const EdgeInsets.all(14),
       children: [
@@ -1336,29 +1816,9 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
                 ),
               ],
             ),
-            Row(
-              children: [
-                IconButton(
-                  onPressed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                          content: Text('متصل مع Supabase بنجاح')),
-                    );
-                  },
-                  icon: const Icon(Icons.cloud_done_outlined,
-                      color: Color(0xFF15803D)),
-                ),
-                IconButton(
-                  onPressed: () {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      SnackBar(
-                          content: Text('المفضلة: ${_favorites.length} صنف')),
-                    );
-                  },
-                  icon: const Icon(Icons.favorite_border_rounded,
-                      color: Color(0xFF374151)),
-                ),
-              ],
+            IconButton(
+              onPressed: _loadRemoteProducts,
+              icon: const Icon(Icons.refresh_rounded, color: Color(0xFF15803D)),
             ),
           ],
         ),
@@ -1384,27 +1844,15 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                      color: Color(0xFF111827),
-                    ),
+                        fontSize: 12, fontWeight: FontWeight.bold),
                   ),
                 ),
-                Container(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFFDCFCE7),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: const Text(
-                    'مؤكد • تعديل',
-                    style: TextStyle(
+                const Text(
+                  'تعديل الموقع',
+                  style: TextStyle(
                       fontSize: 10,
                       fontWeight: FontWeight.bold,
-                      color: Color(0xFF15803D),
-                    ),
-                  ),
+                      color: Color(0xFF15803D)),
                 ),
               ],
             ),
@@ -1415,12 +1863,10 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
           onChanged: (v) => setState(() => _searchQuery = v.trim()),
           decoration: InputDecoration(
             hintText: '...ابحث عن منتج أو صنف',
-            hintStyle: const TextStyle(color: Color(0xFF9CA3AF), fontSize: 13),
             prefixIcon:
                 const Icon(Icons.search_rounded, color: Color(0xFF6B7280)),
             filled: true,
             fillColor: Colors.white,
-            contentPadding: const EdgeInsets.symmetric(vertical: 12),
             border: OutlineInputBorder(
               borderRadius: BorderRadius.circular(15),
               borderSide: BorderSide(color: Colors.grey.shade200),
@@ -1431,54 +1877,26 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
             ),
           ),
         ),
-        const SizedBox(height: 14),
+        const SizedBox(height: 12),
         SizedBox(
-          height: 84,
+          height: 40,
           child: ListView.separated(
             scrollDirection: Axis.horizontal,
             itemCount: _categories.length,
-            separatorBuilder: (_, __) => const SizedBox(width: 12),
+            separatorBuilder: (_, __) => const SizedBox(width: 8),
             itemBuilder: (context, idx) {
               final cat = _categories[idx];
               final selected = _selectedCategory == cat;
-              return GestureDetector(
-                onTap: () => setState(() => _selectedCategory = cat),
-                child: Column(
-                  children: [
-                    Container(
-                      width: 56,
-                      height: 56,
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(14),
-                        border: Border.all(
-                          color: selected
-                              ? const Color(0xFF15803D)
-                              : Colors.grey.shade200,
-                          width: selected ? 2 : 1,
-                        ),
-                      ),
-                      child: Icon(
-                        Icons.grid_view_rounded,
-                        color: selected
-                            ? const Color(0xFF15803D)
-                            : const Color(0xFF4B5563),
-                      ),
-                    ),
-                    const SizedBox(height: 6),
-                    Text(
-                      cat,
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight:
-                            selected ? FontWeight.bold : FontWeight.normal,
-                        color: selected
-                            ? const Color(0xFF15803D)
-                            : const Color(0xFF4B5563),
-                      ),
-                    ),
-                  ],
+              return ChoiceChip(
+                label: Text(cat),
+                selected: selected,
+                selectedColor: const Color(0xFF15803D),
+                labelStyle: TextStyle(
+                  color: selected ? Colors.white : const Color(0xFF111827),
+                  fontWeight: FontWeight.bold,
+                  fontSize: 12,
                 ),
+                onSelected: (_) => setState(() => _selectedCategory = cat),
               );
             },
           ),
@@ -1490,19 +1908,12 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
           decoration: BoxDecoration(
             gradient: const LinearGradient(
               colors: [Color(0xFF15803D), Color(0xFF166534)],
-              begin: Alignment.topRight,
-              end: Alignment.bottomLeft,
             ),
             borderRadius: BorderRadius.circular(20),
           ),
           child: const Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(
-                'سوق الجملة • الناصرية',
-                style: TextStyle(color: Colors.white70, fontSize: 11),
-              ),
-              SizedBox(height: 6),
               Text(
                 'وربح أكبر..\nمشتريات أذكى',
                 style: TextStyle(
@@ -1521,20 +1932,6 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
           ),
         ),
         const SizedBox(height: 14),
-        Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          children: [
-            const Text(
-              'الأكثر طلباً',
-              style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
-            ),
-            Text(
-              'منتجات ${visibleProducts.length}',
-              style: const TextStyle(fontSize: 12, color: Color(0xFF6B7280)),
-            ),
-          ],
-        ),
-        const SizedBox(height: 10),
         GridView.builder(
           shrinkWrap: true,
           physics: const NeverScrollableScrollPhysics(),
@@ -1543,7 +1940,7 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
             crossAxisCount: 2,
             mainAxisSpacing: 12,
             crossAxisSpacing: 12,
-            childAspectRatio: 0.70,
+            childAspectRatio: 0.68,
           ),
           itemBuilder: (context, idx) {
             final p = visibleProducts[idx];
@@ -1566,10 +1963,7 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
                         color: const Color(0xFFF3F6F4),
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: Center(
-                        child: Icon(p.icon,
-                            size: 46, color: const Color(0xFF15803D)),
-                      ),
+                      child: _buildProductThumbnail(p),
                     ),
                   ),
                   const SizedBox(height: 8),
@@ -1580,7 +1974,12 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
                     style: const TextStyle(
                         fontSize: 12, fontWeight: FontWeight.bold),
                   ),
-                  const SizedBox(height: 3),
+                  Text(
+                    'القطعة: ${_formatDinar(p.unitPrice)} • ${p.itemsPerCarton} قطعة',
+                    style:
+                        const TextStyle(fontSize: 10, color: Color(0xFF6B7280)),
+                  ),
+                  const SizedBox(height: 2),
                   Text(
                     _formatDinar(p.wholesalePrice),
                     style: const TextStyle(
@@ -1610,8 +2009,7 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
                                 borderRadius: BorderRadius.circular(10),
                               ),
                             ),
-                            onPressed: () =>
-                                setState(() => _cart[p.id] = 1),
+                            onPressed: () => setState(() => _cart[p.id] = 1),
                             child: const Text('أضف للسلة',
                                 style: TextStyle(fontSize: 11)),
                           ),
@@ -1650,102 +2048,43 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
     );
   }
 
-  Widget _buildMerchantView() {
-    final totalSales =
-        _orders.fold<double>(0, (sum, item) => sum + item.totalAmount);
-
+  Widget _buildCategoriesView() {
     return ListView(
       padding: const EdgeInsets.all(14),
       children: [
-        const Text(
-          'لوحة تحكم تاجر الجملة',
-          style: TextStyle(fontSize: 20, fontWeight: FontWeight.w900),
-        ),
-        const SizedBox(height: 12),
         Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
           children: [
-            Expanded(
-              child: Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF15803D),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('مبيعات اليوم',
-                        style: TextStyle(color: Colors.white70, fontSize: 12)),
-                    const SizedBox(height: 6),
-                    Text(_formatDinar(totalSales),
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 15)),
-                  ],
-                ),
+            const Text('الأقسام',
+                style: TextStyle(fontSize: 19, fontWeight: FontWeight.bold)),
+            if (_isMerchantView)
+              TextButton.icon(
+                onPressed: _openAddCategoryDialog,
+                icon: const Icon(Icons.add, color: Color(0xFF15803D)),
+                label: const Text('قسم جديد',
+                    style: TextStyle(color: Color(0xFF15803D))),
               ),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Container(
-                padding: const EdgeInsets.all(14),
-                decoration: BoxDecoration(
-                  color: const Color(0xFF0F2C59),
-                  borderRadius: BorderRadius.circular(16),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('الطلبات الواردة',
-                        style: TextStyle(color: Colors.white70, fontSize: 12)),
-                    const SizedBox(height: 6),
-                    Text('${_orders.length} طلب',
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 15)),
-                  ],
-                ),
-              ),
-            ),
           ],
         ),
-        const SizedBox(height: 16),
-        ..._orders.map((order) {
+        const SizedBox(height: 10),
+        ..._categories.where((c) => c != 'الكل').map((cat) {
           return Card(
             margin: const EdgeInsets.only(bottom: 10),
             child: ListTile(
-              title: Text('${order.id} • ${order.shopName}',
+              leading:
+                  const Icon(Icons.category_rounded, color: Color(0xFF15803D)),
+              title: Text(cat,
                   style: const TextStyle(fontWeight: FontWeight.bold)),
-              subtitle: Text('العنوان: ${order.confirmedAddress}'),
-              trailing: Text(_formatDinar(order.totalAmount)),
+              onTap: () {
+                setState(() {
+                  _selectedCategory = cat;
+                  _navIndex = 0;
+                });
+              },
             ),
           );
         }),
       ],
-    );
-  }
-
-  Widget _buildCategoriesView() {
-    return ListView(
-      padding: const EdgeInsets.all(14),
-      children: _categories.where((c) => c != 'الكل').map((cat) {
-        return Card(
-          margin: const EdgeInsets.only(bottom: 10),
-          child: ListTile(
-            leading:
-                const Icon(Icons.category_rounded, color: Color(0xFF15803D)),
-            title: Text(cat, style: const TextStyle(fontWeight: FontWeight.bold)),
-            onTap: () {
-              setState(() {
-                _selectedCategory = cat;
-                _navIndex = 0;
-              });
-            },
-          ),
-        );
-      }).toList(),
     );
   }
 
@@ -1767,21 +2106,6 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
         const Text('سلة الطلبات',
             style: TextStyle(fontSize: 19, fontWeight: FontWeight.bold)),
         const SizedBox(height: 10),
-        ListTile(
-          tileColor: Colors.white,
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-          leading:
-              const Icon(Icons.location_on_rounded, color: Color(0xFF15803D)),
-          title: Text(_confirmedAddress,
-              style:
-                  const TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
-          trailing: TextButton(
-            onPressed: _openPinLocationModal,
-            child: const Text('تغيير'),
-          ),
-        ),
-        const SizedBox(height: 10),
         ..._cart.entries.map((e) {
           final p = _products.firstWhere((item) => item.id == e.key);
           return Card(
@@ -1789,7 +2113,8 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
             child: ListTile(
               title: Text(p.name,
                   style: const TextStyle(fontWeight: FontWeight.bold)),
-              subtitle: Text('${e.value} × ${_formatDinar(p.wholesalePrice)}'),
+              subtitle:
+                  Text('${e.value} × ${_formatDinar(p.wholesalePrice)}'),
               trailing: Text(_formatDinar(p.wholesalePrice * e.value)),
             ),
           );
@@ -1806,7 +2131,7 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
             ),
             onPressed: _submitOrder,
             child: Text(
-              'تأكيد الطلب (${_formatDinar(subtotal + delivery)}) • توصيل ${delivery == 0 ? "مجاني" : _formatDinar(delivery)}',
+              'تأكيد الطلب (${_formatDinar(subtotal + delivery)})',
               style: const TextStyle(fontWeight: FontWeight.bold),
             ),
           ),
@@ -1865,20 +2190,10 @@ class _LuxuryMainAppShellState extends State<LuxuryMainAppShell> {
           ),
         ),
         const SizedBox(height: 12),
-        ElevatedButton.icon(
-          style: ElevatedButton.styleFrom(
-            backgroundColor: const Color(0xFF15803D),
-            foregroundColor: Colors.white,
-          ),
-          onPressed: _openPinLocationModal,
-          icon: const Icon(Icons.pin_drop_rounded),
-          label: const Text('تعديل وتأكيد موقع المحل بالدبوس'),
-        ),
-        const SizedBox(height: 10),
         SwitchListTile(
           value: _isMerchantView,
           activeColor: const Color(0xFF15803D),
-          title: const Text('التبديل إلى واجهة تاجر الجملة'),
+          title: const Text('تفعيل قسم التاجر (رفع منتجات وأقسام)'),
           onChanged: (val) => setState(() => _isMerchantView = val),
         ),
         const SizedBox(height: 10),
