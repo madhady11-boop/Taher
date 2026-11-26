@@ -19,7 +19,12 @@ jobs:
           channel: 'stable'
 
       - name: Create iOS folder if missing
-        run: flutter create --platforms=ios .
+        run: |
+          mkdir -p /tmp/app_build
+          cp -r lib pubspec.yaml /tmp/app_build/
+          cd /tmp/app_build
+          flutter create --platforms=ios --project-name jumla_market .
+          cp -r /tmp/app_build/ios "$GITHUB_WORKSPACE/ios"
 
       - name: Get dependencies
         run: flutter pub get
