@@ -1,4 +1,4 @@
-name: Build iOS IPA
+name: Build Unsigned IPA
 
 on:
   push:
@@ -6,10 +6,10 @@ on:
   workflow_dispatch:
 
 jobs:
-  build-ios:
+  build-ipa:
     runs-on: macos-latest
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v4
 
       - name: Setup Flutter
@@ -18,38 +18,23 @@ jobs:
           flutter-version: '3.24.0'
           channel: 'stable'
 
-      - name: Create iOS folder if missing
+      - name: Prepare iOS project & permissions
         run: |
-          mkdir -p /tmp/app_build
-          cp -r lib pubspec.yaml /tmp/app_build/
-          cd /tmp/app_build
-          flutter create --platforms=ios --project-name jumla_market .
-          /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryUsageDescription string 'نحتاج الوصول للصور لرفع صور منتجات الجملة'" /tmp/app_build/ios/Runner/Info.plist
-          cp -r /tmp/app_build/ios "$GITHUB_WORKSPACE/ios"
+          if [ ! -d "ios" ]; then
+            flutter create --platforms=ios --project-name jumla_market .
+          fi
+          /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryUsageDescription string 'نحتاج الوصول للصور لرفع صور منتجات الجملة'" ios/Runner/Info.plist 2>/dev/null || true
+          flutter pub get
+          cd ios && pod install --repo-update && cd ..
 
-      - name: Get dependencies
-        run: flutter pub get
-
-      - name: Build iOS (No Codesign)
+      - name: Build iOS app without codesigning
         run: |
-          flutter build ios --release --no-codesign \
-            --dart-define=FLUTTER_WEB_USE_SKIA=false || true
-          xcodebuild -workspace ios/Runner.xcworkspace \
-            -scheme Runner \
-            -configuration Release \
-            -sdk iphoneos \
-            -derivedDataPath build/ios_derived \
-            CODE_SIGN_IDENTITY="" \
-            CODE_SIGNING_REQUIRED=NO \
-            CODE_SIGNING_ALLOWED=NO \
-            ONLY_ACTIVE_ARCH=NO \
-            build
+          flutter build ios --release --no-codesign
 
       - name: Package IPA
         run: |
-          APP_PATH=$(find build/ios_derived -name "Runner.app" -type d | head -n 1)
           mkdir -p Payload
-          cp -r "$APP_PATH" Payload/
+          cp -r build/ios/iphoneos/Runner.app Payload/
           zip -r JumlaMarket.ipa Payload
 
       - name: Upload IPA Artifact
