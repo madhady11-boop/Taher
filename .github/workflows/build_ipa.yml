@@ -27,14 +27,26 @@ jobs:
           flutter pub get
           cd ios && pod install --repo-update && cd ..
 
-      - name: Build iOS app without codesigning
+      - name: Build Runner.app without signing
         run: |
-          flutter build ios --release --no-codesign
+          flutter build ios --release --no-codesign || true
+          xcodebuild -workspace ios/Runner.xcworkspace \
+            -scheme Runner \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build/ios_derived \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            ONLY_ACTIVE_ARCH=NO \
+            build
 
       - name: Package IPA
         run: |
+          APP_PATH=$(find build/ios_derived -name "Runner.app" -type d | head -n 1)
+          test -n "$APP_PATH"
           mkdir -p Payload
-          cp -r build/ios/iphoneos/Runner.app Payload/
+          cp -r "$APP_PATH" Payload/
           zip -r JumlaMarket.ipa Payload
 
       - name: Upload IPA Artifact
